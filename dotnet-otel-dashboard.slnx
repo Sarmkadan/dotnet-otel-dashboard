@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/dotnet-otel-dashboard/">
+    <Project Path="src/dotnet-otel-dashboard/DotnetOtelDashboard.csproj" />
+  </Folder>
+  <Folder Name="/tests/" />
+  <Folder Name="/tests/dotnet-otel-dashboard.Tests/">
+    <Project Path="tests/dotnet-otel-dashboard.Tests/DotnetOtelDashboard.Tests.csproj" />
+  </Folder>
+</Solution>

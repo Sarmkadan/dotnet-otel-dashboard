@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>DotnetOtelDashboard</RootNamespace>
+    <AssemblyName>DotnetOtelDashboard</AssemblyName>
+
+    <PackageId>DotnetOtelDashboard</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Vladyslav Zaiets</Authors>
+    <Description>Self-hosted OpenTelemetry dashboard for any .NET app - traces, metrics, logs without Aspire dependency</Description>
+    <PackageTags>opentelemetry;dashboard;traces;metrics;observability</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/Sarmkadan/dotnet-otel-dashboard</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/Sarmkadan/dotnet-otel-dashboard</PackageProjectUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+</Project>
