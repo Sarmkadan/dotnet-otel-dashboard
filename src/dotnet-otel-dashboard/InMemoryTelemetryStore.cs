@@ -9,6 +9,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     private readonly OtelDashboardOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly RingBuffer<SpanRecord> _spans;
+    private readonly RingBuffer<MetricPoint> _metrics;
 
     /// <summary>
     /// Creates a store bounded by <paramref name="options"/>.
@@ -20,6 +21,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _timeProvider = timeProvider ?? TimeProvider.System;
         _spans = new RingBuffer<SpanRecord>(_options.MaxSpans);
+        _metrics = new RingBuffer<MetricPoint>(_options.MaxMetricPoints);
     }
 
     /// <inheritdoc />
@@ -31,7 +33,10 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
 
     /// <inheritdoc />
     public ValueTask WriteMetricsAsync(IReadOnlyList<MetricPoint> points, CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        _metrics.AddRange(points);
+        return ValueTask.CompletedTask;
+    }
 
     /// <inheritdoc />
     public ValueTask WriteLogsAsync(IReadOnlyList<LogRecord> records, CancellationToken cancellationToken = default)
@@ -71,7 +76,18 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
 
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<MetricPoint>> QueryMetricsAsync(MetricQuery query, CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        IReadOnlyList<MetricPoint> matches = _metrics.Snapshot()
+            .Where(point => string.Equals(point.MetricName, query.MetricName, StringComparison.Ordinal))
+            .Where(point => query.ServiceName is null || string.Equals(point.ServiceName, query.ServiceName, StringComparison.Ordinal))
+            .Where(point => point.Timestamp >= query.From && point.Timestamp < query.To)
+            .OrderBy(point => point.Timestamp)
+            .ToArray();
+
+        return ValueTask.FromResult(matches);
+    }
 
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<LogRecord>> QueryLogsAsync(LogQuery query, CancellationToken cancellationToken = default)
