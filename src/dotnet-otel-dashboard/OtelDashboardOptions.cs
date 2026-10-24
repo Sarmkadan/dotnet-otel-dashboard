@@ -43,9 +43,57 @@ public sealed class OtelDashboardOptions
     public string? AuthorizationPolicy { get; set; }
 
     /// <summary>
-    /// Validates the options and throws if any value is out of range.
+    /// Validates the options and throws if any value is out of range. On success, normalizes
+    /// <see cref="ReceiverBasePath"/> by removing trailing slashes (the root path <c>/</c> is kept as-is).
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">A limit is non-positive or retention is non-positive.</exception>
-    /// <exception cref="ArgumentException"><see cref="ReceiverBasePath"/> is not a valid absolute path.</exception>
-    public void Validate() => throw new NotImplementedException();
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="Retention"/> or a size limit is not greater than zero.</exception>
+    /// <exception cref="ArgumentException"><see cref="ReceiverBasePath"/> is null, whitespace, not rooted at <c>/</c>, or contains whitespace, <c>?</c> or <c>#</c>;
+    /// or <see cref="AuthorizationPolicy"/> is non-null but whitespace.</exception>
+    public void Validate()
+    {
+        if (Retention <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(Retention), Retention, "Retention must be greater than zero.");
+        }
+
+        if (MaxSpans <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxSpans), MaxSpans, "MaxSpans must be greater than zero.");
+        }
+
+        if (MaxMetricPoints <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxMetricPoints), MaxMetricPoints, "MaxMetricPoints must be greater than zero.");
+        }
+
+        if (MaxLogRecords <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxLogRecords), MaxLogRecords, "MaxLogRecords must be greater than zero.");
+        }
+
+        if (string.IsNullOrWhiteSpace(ReceiverBasePath))
+        {
+            throw new ArgumentException("ReceiverBasePath must not be null or whitespace.", nameof(ReceiverBasePath));
+        }
+
+        if (ReceiverBasePath[0] != '/')
+        {
+            throw new ArgumentException($"ReceiverBasePath must start with '/' but was '{ReceiverBasePath}'.", nameof(ReceiverBasePath));
+        }
+
+        foreach (var c in ReceiverBasePath)
+        {
+            if (char.IsWhiteSpace(c) || c is '?' or '#')
+            {
+                throw new ArgumentException($"ReceiverBasePath must not contain whitespace, '?' or '#' but was '{ReceiverBasePath}'.", nameof(ReceiverBasePath));
+            }
+        }
+
+        ReceiverBasePath = ReceiverBasePath.Length > 1 ? ReceiverBasePath.TrimEnd('/') : ReceiverBasePath;
+
+        if (AuthorizationPolicy is not null && string.IsNullOrWhiteSpace(AuthorizationPolicy))
+        {
+            throw new ArgumentException("AuthorizationPolicy must be null or non-whitespace.", nameof(AuthorizationPolicy));
+        }
+    }
 }
