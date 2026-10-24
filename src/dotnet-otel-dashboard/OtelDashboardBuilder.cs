@@ -52,11 +52,12 @@ public sealed class OtelDashboardBuilder
     }
 
     /// <summary>
-    /// Validates options and creates the store and receiver.
+    /// Validates options and creates the store and receiver. Without <see cref="UseReceiver"/>, the receiver is an
+    /// <see cref="OtlpTelemetryReceiver"/> writing into the store.
     /// </summary>
     /// <returns>A ready-to-use dashboard instance.</returns>
     /// <exception cref="ArgumentOutOfRangeException">Options are invalid.</exception>
-    /// <exception cref="InvalidOperationException">A factory returned <see langword="null"/>, or no receiver is configured.</exception>
+    /// <exception cref="InvalidOperationException">A factory returned <see langword="null"/>.</exception>
     public OtelDashboard Build()
     {
         _options.Validate();
@@ -70,12 +71,9 @@ public sealed class OtelDashboardBuilder
             throw new InvalidOperationException("The store factory returned null.");
         }
 
-        if (_receiverFactory is null)
-        {
-            throw new InvalidOperationException("No receiver configured; call UseReceiver.");
-        }
-
-        ITelemetryReceiver? receiver = _receiverFactory(_options, store);
+        ITelemetryReceiver? receiver = _receiverFactory is null
+            ? new OtlpTelemetryReceiver(store)
+            : _receiverFactory(_options, store);
 
         if (receiver is null)
         {
