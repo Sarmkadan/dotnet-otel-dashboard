@@ -10,6 +10,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     private readonly TimeProvider _timeProvider;
     private readonly RingBuffer<SpanRecord> _spans;
     private readonly RingBuffer<MetricPoint> _metrics;
+    private readonly RingBuffer<LogRecord> _logs;
 
     /// <summary>
     /// Creates a store bounded by <paramref name="options"/>.
@@ -22,6 +23,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
         _timeProvider = timeProvider ?? TimeProvider.System;
         _spans = new RingBuffer<SpanRecord>(_options.MaxSpans);
         _metrics = new RingBuffer<MetricPoint>(_options.MaxMetricPoints);
+        _logs = new RingBuffer<LogRecord>(_options.MaxLogRecords);
     }
 
     /// <inheritdoc />
@@ -40,7 +42,10 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
 
     /// <inheritdoc />
     public ValueTask WriteLogsAsync(IReadOnlyList<LogRecord> records, CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        _logs.AddRange(records);
+        return ValueTask.CompletedTask;
+    }
 
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<SpanRecord>> QuerySpansAsync(SpanQuery query, CancellationToken cancellationToken = default)
@@ -91,7 +96,22 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
 
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<LogRecord>> QueryLogsAsync(LogQuery query, CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        IReadOnlyList<LogRecord> matches = _logs.Snapshot()
+            .Where(record => query.ServiceName is null || string.Equals(record.ServiceName, query.ServiceName, StringComparison.Ordinal))
+            .Where(record => query.MinSeverity is null || record.Severity >= query.MinSeverity.Value)
+            .Where(record => query.TraceId is null || string.Equals(record.TraceId, query.TraceId, StringComparison.Ordinal))
+            .Where(record => query.Search is null || record.Body.Contains(query.Search, StringComparison.OrdinalIgnoreCase))
+            .Where(record => query.From is null || record.Timestamp >= query.From.Value)
+            .Where(record => query.To is null || record.Timestamp < query.To.Value)
+            .OrderByDescending(record => record.Timestamp)
+            .Take(query.Limit)
+            .ToArray();
+
+        return ValueTask.FromResult(matches);
+    }
 
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetServiceNamesAsync(CancellationToken cancellationToken = default)
