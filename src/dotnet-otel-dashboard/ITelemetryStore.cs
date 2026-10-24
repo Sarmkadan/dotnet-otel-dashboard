@@ -54,47 +54,261 @@ public interface ITelemetryStore
     ValueTask ClearAsync(CancellationToken cancellationToken = default);
 }
 
-/// <summary>Span filter.</summary>
-/// <param name="ServiceName">Restrict to this service, or <see langword="null"/> for all.</param>
-/// <param name="SpanName">Restrict to this span name, or <see langword="null"/> for all.</param>
-/// <param name="MinDuration">Only spans at least this long, or <see langword="null"/>.</param>
-/// <param name="ErrorsOnly">Only spans with <see cref="SpanStatusCode.Error"/>.</param>
-/// <param name="From">Inclusive lower bound on start time, or <see langword="null"/>.</param>
-/// <param name="To">Exclusive upper bound on start time, or <see langword="null"/>.</param>
-/// <param name="Limit">Maximum number of results. Default 100.</param>
-public sealed record SpanQuery(
-    string? ServiceName = null,
-    string? SpanName = null,
-    TimeSpan? MinDuration = null,
-    bool ErrorsOnly = false,
-    DateTimeOffset? From = null,
-    DateTimeOffset? To = null,
-    int Limit = 100);
+/// <summary>
+/// Span filter. Validated on construction and on every <c>with</c> assignment. Each assigned bound is checked
+/// against the current value of the other bound, so moving both bounds in one <c>with</c> is checked step by step.
+/// </summary>
+public sealed record SpanQuery
+{
+    private DateTimeOffset? _from;
+    private DateTimeOffset? _to;
+    private int _limit;
 
-/// <summary>Metric filter.</summary>
-/// <param name="MetricName">Instrument name (required).</param>
-/// <param name="ServiceName">Restrict to this service, or <see langword="null"/> for all.</param>
-/// <param name="From">Inclusive lower bound on timestamp.</param>
-/// <param name="To">Exclusive upper bound on timestamp.</param>
-public sealed record MetricQuery(
-    string MetricName,
-    string? ServiceName,
-    DateTimeOffset From,
-    DateTimeOffset To);
+    /// <summary>Creates a span filter.</summary>
+    /// <param name="ServiceName">Restrict to this service, or <see langword="null"/> for all.</param>
+    /// <param name="SpanName">Restrict to this span name, or <see langword="null"/> for all.</param>
+    /// <param name="MinDuration">Only spans at least this long, or <see langword="null"/>.</param>
+    /// <param name="ErrorsOnly">Only spans with <see cref="SpanStatusCode.Error"/>.</param>
+    /// <param name="From">Inclusive lower bound on start time, or <see langword="null"/>.</param>
+    /// <param name="To">Exclusive upper bound on start time, or <see langword="null"/>.</param>
+    /// <param name="Limit">Maximum number of results. Default 100.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="Limit"/> is zero or negative.</exception>
+    /// <exception cref="ArgumentException"><paramref name="From"/> is later than <paramref name="To"/>.</exception>
+    public SpanQuery(
+        string? ServiceName = null,
+        string? SpanName = null,
+        TimeSpan? MinDuration = null,
+        bool ErrorsOnly = false,
+        DateTimeOffset? From = null,
+        DateTimeOffset? To = null,
+        int Limit = 100)
+    {
+        QueryGuards.ThrowIfInverted(From, To, nameof(To));
+        this.ServiceName = ServiceName;
+        this.SpanName = SpanName;
+        this.MinDuration = MinDuration;
+        this.ErrorsOnly = ErrorsOnly;
+        _from = From;
+        _to = To;
+        this.Limit = Limit;
+    }
 
-/// <summary>Log filter.</summary>
-/// <param name="ServiceName">Restrict to this service, or <see langword="null"/> for all.</param>
-/// <param name="MinSeverity">Minimum severity number, or <see langword="null"/>.</param>
-/// <param name="TraceId">Only records correlated to this trace, or <see langword="null"/>.</param>
-/// <param name="Search">Case-insensitive substring match on <see cref="LogRecord.Body"/>, or <see langword="null"/>.</param>
-/// <param name="From">Inclusive lower bound on timestamp, or <see langword="null"/>.</param>
-/// <param name="To">Exclusive upper bound on timestamp, or <see langword="null"/>.</param>
-/// <param name="Limit">Maximum number of results. Default 100.</param>
-public sealed record LogQuery(
-    string? ServiceName = null,
-    int? MinSeverity = null,
-    string? TraceId = null,
-    string? Search = null,
-    DateTimeOffset? From = null,
-    DateTimeOffset? To = null,
-    int Limit = 100);
+    /// <summary>Restrict to this service, or <see langword="null"/> for all.</summary>
+    public string? ServiceName { get; init; }
+
+    /// <summary>Restrict to this span name, or <see langword="null"/> for all.</summary>
+    public string? SpanName { get; init; }
+
+    /// <summary>Only spans at least this long, or <see langword="null"/>.</summary>
+    public TimeSpan? MinDuration { get; init; }
+
+    /// <summary>Only spans with <see cref="SpanStatusCode.Error"/>.</summary>
+    public bool ErrorsOnly { get; init; }
+
+    /// <summary>Inclusive lower bound on start time, or <see langword="null"/>.</summary>
+    /// <exception cref="ArgumentException">The value is later than <see cref="To"/>.</exception>
+    public DateTimeOffset? From
+    {
+        get => _from;
+        init
+        {
+            QueryGuards.ThrowIfInverted(value, _to, nameof(From));
+            _from = value;
+        }
+    }
+
+    /// <summary>Exclusive upper bound on start time, or <see langword="null"/>.</summary>
+    /// <exception cref="ArgumentException">The value is earlier than <see cref="From"/>.</exception>
+    public DateTimeOffset? To
+    {
+        get => _to;
+        init
+        {
+            QueryGuards.ThrowIfInverted(_from, value, nameof(To));
+            _to = value;
+        }
+    }
+
+    /// <summary>Maximum number of results. Default 100.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is zero or negative.</exception>
+    public int Limit
+    {
+        get => _limit;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value, nameof(Limit));
+            _limit = value;
+        }
+    }
+}
+
+/// <summary>
+/// Metric filter. Validated on construction and on every <c>with</c> assignment. Each assigned bound is checked
+/// against the current value of the other bound, so moving both bounds in one <c>with</c> is checked step by step.
+/// </summary>
+public sealed record MetricQuery
+{
+    private string _metricName;
+    private DateTimeOffset _from;
+    private DateTimeOffset _to;
+
+    /// <summary>Creates a metric filter.</summary>
+    /// <param name="MetricName">Instrument name (required).</param>
+    /// <param name="ServiceName">Restrict to this service, or <see langword="null"/> for all.</param>
+    /// <param name="From">Inclusive lower bound on timestamp.</param>
+    /// <param name="To">Exclusive upper bound on timestamp.</param>
+    /// <exception cref="ArgumentException"><paramref name="MetricName"/> is null, empty or whitespace.</exception>
+    /// <exception cref="ArgumentException"><paramref name="From"/> is later than <paramref name="To"/>.</exception>
+    public MetricQuery(string MetricName, string? ServiceName, DateTimeOffset From, DateTimeOffset To)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(MetricName);
+        QueryGuards.ThrowIfInverted(From, To, nameof(To));
+        _metricName = MetricName;
+        this.ServiceName = ServiceName;
+        _from = From;
+        _to = To;
+    }
+
+    /// <summary>Instrument name (required).</summary>
+    /// <exception cref="ArgumentException">The value is null, empty or whitespace.</exception>
+    public string MetricName
+    {
+        get => _metricName;
+        init
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(value, nameof(MetricName));
+            _metricName = value;
+        }
+    }
+
+    /// <summary>Restrict to this service, or <see langword="null"/> for all.</summary>
+    public string? ServiceName { get; init; }
+
+    /// <summary>Inclusive lower bound on timestamp.</summary>
+    /// <exception cref="ArgumentException">The value is later than <see cref="To"/>.</exception>
+    public DateTimeOffset From
+    {
+        get => _from;
+        init
+        {
+            QueryGuards.ThrowIfInverted(value, _to, nameof(From));
+            _from = value;
+        }
+    }
+
+    /// <summary>Exclusive upper bound on timestamp.</summary>
+    /// <exception cref="ArgumentException">The value is earlier than <see cref="From"/>.</exception>
+    public DateTimeOffset To
+    {
+        get => _to;
+        init
+        {
+            QueryGuards.ThrowIfInverted(_from, value, nameof(To));
+            _to = value;
+        }
+    }
+}
+
+/// <summary>
+/// Log filter. Validated on construction and on every <c>with</c> assignment. Each assigned bound is checked
+/// against the current value of the other bound, so moving both bounds in one <c>with</c> is checked step by step.
+/// </summary>
+public sealed record LogQuery
+{
+    private DateTimeOffset? _from;
+    private DateTimeOffset? _to;
+    private int _limit;
+
+    /// <summary>Creates a log filter.</summary>
+    /// <param name="ServiceName">Restrict to this service, or <see langword="null"/> for all.</param>
+    /// <param name="MinSeverity">Minimum severity number, or <see langword="null"/>.</param>
+    /// <param name="TraceId">Only records correlated to this trace, or <see langword="null"/>.</param>
+    /// <param name="Search">Case-insensitive substring match on <see cref="LogRecord.Body"/>, or <see langword="null"/>.</param>
+    /// <param name="From">Inclusive lower bound on timestamp, or <see langword="null"/>.</param>
+    /// <param name="To">Exclusive upper bound on timestamp, or <see langword="null"/>.</param>
+    /// <param name="Limit">Maximum number of results. Default 100.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="Limit"/> is zero or negative.</exception>
+    /// <exception cref="ArgumentException"><paramref name="From"/> is later than <paramref name="To"/>.</exception>
+    public LogQuery(
+        string? ServiceName = null,
+        int? MinSeverity = null,
+        string? TraceId = null,
+        string? Search = null,
+        DateTimeOffset? From = null,
+        DateTimeOffset? To = null,
+        int Limit = 100)
+    {
+        QueryGuards.ThrowIfInverted(From, To, nameof(To));
+        this.ServiceName = ServiceName;
+        this.MinSeverity = MinSeverity;
+        this.TraceId = TraceId;
+        this.Search = Search;
+        _from = From;
+        _to = To;
+        this.Limit = Limit;
+    }
+
+    /// <summary>Restrict to this service, or <see langword="null"/> for all.</summary>
+    public string? ServiceName { get; init; }
+
+    /// <summary>Minimum severity number, or <see langword="null"/>.</summary>
+    public int? MinSeverity { get; init; }
+
+    /// <summary>Only records correlated to this trace, or <see langword="null"/>.</summary>
+    public string? TraceId { get; init; }
+
+    /// <summary>Case-insensitive substring match on <see cref="LogRecord.Body"/>, or <see langword="null"/>.</summary>
+    public string? Search { get; init; }
+
+    /// <summary>Inclusive lower bound on timestamp, or <see langword="null"/>.</summary>
+    /// <exception cref="ArgumentException">The value is later than <see cref="To"/>.</exception>
+    public DateTimeOffset? From
+    {
+        get => _from;
+        init
+        {
+            QueryGuards.ThrowIfInverted(value, _to, nameof(From));
+            _from = value;
+        }
+    }
+
+    /// <summary>Exclusive upper bound on timestamp, or <see langword="null"/>.</summary>
+    /// <exception cref="ArgumentException">The value is earlier than <see cref="From"/>.</exception>
+    public DateTimeOffset? To
+    {
+        get => _to;
+        init
+        {
+            QueryGuards.ThrowIfInverted(_from, value, nameof(To));
+            _to = value;
+        }
+    }
+
+    /// <summary>Maximum number of results. Default 100.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is zero or negative.</exception>
+    public int Limit
+    {
+        get => _limit;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value, nameof(Limit));
+            _limit = value;
+        }
+    }
+}
+
+/// <summary>Shared checks for the query records.</summary>
+internal static class QueryGuards
+{
+    /// <summary>Throws when both bounds are set and <paramref name="from"/> is later than <paramref name="to"/>.</summary>
+    /// <param name="from">Lower bound, or <see langword="null"/>.</param>
+    /// <param name="to">Upper bound, or <see langword="null"/>.</param>
+    /// <param name="paramName">Parameter name reported on the exception.</param>
+    public static void ThrowIfInverted(DateTimeOffset? from, DateTimeOffset? to, string paramName)
+    {
+        if (from is { } lower && to is { } upper && lower > upper)
+        {
+            throw new ArgumentException("From must not be later than To.", paramName);
+        }
+    }
+}
