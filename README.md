@@ -140,6 +140,122 @@ The interface contract:
   `To` exclusive.
 - Return empty lists rather than `null`. `GetTraceAsync` returns an empty list for an unknown trace.
 
+## Ingest and composition
+
+### Composing the dashboard
+
+`OtelDashboardBuilder` is the framework-agnostic composition root. It collects options, an optional store factory and
+an optional receiver factory, then validates and wires them together:
+
+```csharp
+using DotnetOtelDashboard;
+
+OtelDashboard dashboard = new OtelDashboardBuilder()
+    .Configure(o =>
+    {
+        o.Retention = TimeSpan.FromMinutes(30);
+        o.MaxSpans = 50_000;
+    })
+    .UseStore(o => new MyStore(o)) // MyStore implements ITelemetryStore; omit UseStore for InMemoryTelemetryStore
+    .Build();
+
+ITelemetryStore store = dashboard.Store;
+ITelemetryReceiver receiver = dashboard.Receiver;
+OtelDashboardOptions options = dashboard.Options;
+```
+
+- `Configure` can be called several times; later calls win.
+- `UseStore` replaces the default `InMemoryTelemetryStore`. The factory receives the options, which are already
+  validated when the factory runs in `Build`.
+- `UseReceiver` replaces the default `OtlpTelemetryReceiver`. Its factory receives the options and the configured store.
+- `Build` validates the options (invalid values throw `ArgumentOutOfRangeException`) and throws
+  `InvalidOperationException` if a factory returns `null`.
+- `Build` returns an `OtelDashboard` record with three members: `Options`, `Store` and `Receiver`. The receiver
+  writes into the same store that the dashboard exposes.
+
+### ITelemetryReceiver
+
+`ITelemetryReceiver` accepts raw OTLP/protobuf request bodies, one method per signal:
+
+| Method | OTLP request message | Returns |
+|--------|----------------------|---------|
+| `ReceiveTracesAsync(ReadOnlyMemory<byte> payload, CancellationToken)` | `ExportTraceServiceRequest` | Number of spans accepted |
+| `ReceiveMetricsAsync(ReadOnlyMemory<byte> payload, CancellationToken)` | `ExportMetricsServiceRequest` | Number of data points accepted |
+| `ReceiveLogsAsync(ReadOnlyMemory<byte> payload, CancellationToken)` | `ExportLogsServiceRequest` | Number of log records accepted |
+
+Each method decodes the payload, writes the records into the store and returns the count. A request with no records
+returns `0` and writes nothing. A malformed payload throws `InvalidDataException`; a payload larger than
+`OtlpTelemetryReceiver.MaxPayloadBytes` (16 MiB) throws `ArgumentOutOfRangeException` before any decoding happens.
+
+The receiver does not know about HTTP. The minimal API below shows how a host passes request bodies to it. This is
+what the upcoming `MapOtelDashboard` will do for you, mapping these three routes automatically:
+
+```csharp
+using DotnetOtelDashboard;
+
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+var dashboard = new OtelDashboardBuilder().Build();
+var receiver = dashboard.Receiver;
+
+app.MapPost("/v1/traces", async (HttpContext http, CancellationToken ct) =>
+{
+    var body = await ReadBodyAsync(http, ct);
+    return Results.Ok(new { accepted = await receiver.ReceiveTracesAsync(body, ct) });
+});
+
+app.MapPost("/v1/metrics", async (HttpContext http, CancellationToken ct) =>
+{
+    var body = await ReadBodyAsync(http, ct);
+    return Results.Ok(new { accepted = await receiver.ReceiveMetricsAsync(body, ct) });
+});
+
+app.MapPost("/v1/logs", async (HttpContext http, CancellationToken ct) =>
+{
+    var body = await ReadBodyAsync(http, ct);
+    return Results.Ok(new { accepted = await receiver.ReceiveLogsAsync(body, ct) });
+});
+
+app.Run();
+
+static async Task<byte[]> ReadBodyAsync(HttpContext http, CancellationToken ct)
+{
+    using var buffer = new MemoryStream();
+    await http.Request.Body.CopyToAsync(buffer, ct);
+    return buffer.ToArray();
+}
+```
+
+### Zero dependencies
+
+The OTLP protobuf payload is decoded with a built-in wire-format reader (`ProtobufReader`), so the package does not
+reference Google.Protobuf, OpenTelemetry.Proto or Aspire. The reader is internal, and no protobuf types appear in the
+public API.
+
+### Waterfall
+
+`TraceWaterfall.Build` lays out the spans of one trace as depth-first rows for the trace view:
+
+```csharp
+var rows = TraceWaterfall.Build(await store.GetTraceAsync(traceId));
+
+foreach (var row in rows)
+{
+    Console.WriteLine($"{new string(' ', row.Depth * 2)}{row.Span.SpanId} @ {row.OffsetPercent:F1}% width {row.WidthPercent:F1}%");
+}
+```
+
+Each `WaterfallRow` has these fields:
+
+- `Span`: the `SpanRecord` this row represents.
+- `Depth`: nesting depth in the span tree; root spans are at depth 0.
+- `Offset`: start of the span relative to the start of the trace, as a `TimeSpan`.
+- `OffsetPercent`: `Offset` as a percentage of the total trace duration.
+- `WidthPercent`: span duration as a percentage of the total trace duration, at least 0.1 so zero-length spans stay visible.
+
+Spans whose parent is missing from the trace become roots. Rows come back in pre-order, so every span appears once.
+
 ## API overview
 
 | Type | Purpose |
