@@ -8,6 +8,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
 {
     private readonly OtelDashboardOptions _options;
     private readonly TimeProvider _timeProvider;
+    private readonly RingBuffer<SpanRecord> _spans;
 
     /// <summary>
     /// Creates a store bounded by <paramref name="options"/>.
@@ -18,11 +19,15 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _spans = new RingBuffer<SpanRecord>(_options.MaxSpans);
     }
 
     /// <inheritdoc />
     public ValueTask WriteSpansAsync(IReadOnlyList<SpanRecord> spans, CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        _spans.AddRange(spans);
+        return ValueTask.CompletedTask;
+    }
 
     /// <inheritdoc />
     public ValueTask WriteMetricsAsync(IReadOnlyList<MetricPoint> points, CancellationToken cancellationToken = default)
@@ -38,7 +43,15 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
 
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<SpanRecord>> GetTraceAsync(string traceId, CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        IReadOnlyList<SpanRecord> trace = _spans.Snapshot()
+            .Where(span => string.Equals(span.TraceId, traceId, StringComparison.Ordinal))
+            .OrderBy(span => span.StartTime)
+            .ThenBy(span => span.SpanId, StringComparer.Ordinal)
+            .ToArray();
+
+        return ValueTask.FromResult(trace);
+    }
 
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<MetricPoint>> QueryMetricsAsync(MetricQuery query, CancellationToken cancellationToken = default)
