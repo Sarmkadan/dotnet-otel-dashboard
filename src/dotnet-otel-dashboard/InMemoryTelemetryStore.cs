@@ -17,9 +17,15 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     /// </summary>
     /// <param name="options">Limits and retention.</param>
     /// <param name="timeProvider">Clock used for retention eviction; defaults to <see cref="TimeProvider.System"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="OtelDashboardOptions.Retention"/> or a size limit is not greater than zero.</exception>
+    /// <exception cref="ArgumentException"><see cref="OtelDashboardOptions.ReceiverBasePath"/> or <see cref="OtelDashboardOptions.AuthorizationPolicy"/> is invalid.</exception>
     public InMemoryTelemetryStore(OtelDashboardOptions options, TimeProvider? timeProvider = null)
     {
-        _options = options ?? throw new ArgumentNullException(nameof(options));
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
+
+        _options = options;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _spans = new RingBuffer<SpanRecord>(_options.MaxSpans);
         _metrics = new RingBuffer<MetricPoint>(_options.MaxMetricPoints);
@@ -27,30 +33,37 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     }
 
     /// <inheritdoc />
+    /// <exception cref="ArgumentNullException"><paramref name="spans"/> is <see langword="null"/>.</exception>
     public ValueTask WriteSpansAsync(IReadOnlyList<SpanRecord> spans, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(spans);
         EvictExpired();
         _spans.AddRange(spans);
         return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc />
+    /// <exception cref="ArgumentNullException"><paramref name="points"/> is <see langword="null"/>.</exception>
     public ValueTask WriteMetricsAsync(IReadOnlyList<MetricPoint> points, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(points);
         EvictExpired();
         _metrics.AddRange(points);
         return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc />
+    /// <exception cref="ArgumentNullException"><paramref name="records"/> is <see langword="null"/>.</exception>
     public ValueTask WriteLogsAsync(IReadOnlyList<LogRecord> records, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(records);
         EvictExpired();
         _logs.AddRange(records);
         return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc />
+    /// <exception cref="ArgumentNullException"><paramref name="query"/> is <see langword="null"/>.</exception>
     public ValueTask<IReadOnlyList<SpanRecord>> QuerySpansAsync(SpanQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -72,8 +85,11 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     }
 
     /// <inheritdoc />
+    /// <exception cref="ArgumentNullException"><paramref name="traceId"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="traceId"/> is empty or whitespace.</exception>
     public ValueTask<IReadOnlyList<SpanRecord>> GetTraceAsync(string traceId, CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(traceId);
         EvictExpired();
         IReadOnlyList<SpanRecord> trace = _spans.Snapshot()
             .Where(span => string.Equals(span.TraceId, traceId, StringComparison.Ordinal))
@@ -85,6 +101,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     }
 
     /// <inheritdoc />
+    /// <exception cref="ArgumentNullException"><paramref name="query"/> is <see langword="null"/>.</exception>
     public ValueTask<IReadOnlyList<MetricPoint>> QueryMetricsAsync(MetricQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -101,6 +118,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     }
 
     /// <inheritdoc />
+    /// <exception cref="ArgumentNullException"><paramref name="query"/> is <see langword="null"/>.</exception>
     public ValueTask<IReadOnlyList<LogRecord>> QueryLogsAsync(LogQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
