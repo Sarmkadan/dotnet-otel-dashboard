@@ -24,7 +24,8 @@ public static class TraceWaterfall
     /// <remarks>
     /// Spans whose <see cref="SpanRecord.ParentSpanId"/> is missing from <paramref name="spans"/> become roots.
     /// Roots and siblings are ordered by start time, then by span id. Spans that are only reachable through a
-    /// cycle, with no root above them, are not emitted.
+    /// cycle have no root above them; they are emitted afterwards as extra roots, in the same order, so every
+    /// span appears exactly once.
     /// </remarks>
     /// <param name="spans">Spans of a single trace, in any order.</param>
     /// <returns>Rows in depth-first pre-order, or an empty list when <paramref name="spans"/> is empty.</returns>
@@ -85,32 +86,38 @@ public static class TraceWaterfall
         // Explicit stack instead of recursion, so deep span trees cannot overflow the call stack.
         // Children are pushed in reverse so they pop in start-time order.
         var stack = new Stack<(SpanRecord Span, int Depth)>();
-        for (var i = roots.Count - 1; i >= 0; i--)
-        {
-            stack.Push((roots[i], 0));
-        }
 
-        while (stack.Count > 0)
+        // Roots first; then any span still unvisited sits in a cycle and is walked as its own root.
+        foreach (var start in roots.Concat(ordered))
         {
-            var (span, depth) = stack.Pop();
-            if (!visited.Add(span.SpanId))
+            if (visited.Contains(start.SpanId))
             {
                 continue;
             }
 
-            var offset = span.StartTime - traceStart;
-            rows.Add(new WaterfallRow(
-                span,
-                depth,
-                offset,
-                offset.Ticks / totalTicks * 100,
-                Math.Max(span.Duration.Ticks / totalTicks * 100, MinWidthPercent)));
-
-            if (children.TryGetValue(span.SpanId, out var kids))
+            stack.Push((start, 0));
+            while (stack.Count > 0)
             {
-                for (var i = kids.Count - 1; i >= 0; i--)
+                var (span, depth) = stack.Pop();
+                if (!visited.Add(span.SpanId))
                 {
-                    stack.Push((kids[i], depth + 1));
+                    continue;
+                }
+
+                var offset = span.StartTime - traceStart;
+                rows.Add(new WaterfallRow(
+                    span,
+                    depth,
+                    offset,
+                    offset.Ticks / totalTicks * 100,
+                    Math.Max(span.Duration.Ticks / totalTicks * 100, MinWidthPercent)));
+
+                if (children.TryGetValue(span.SpanId, out var kids))
+                {
+                    for (var i = kids.Count - 1; i >= 0; i--)
+                    {
+                        stack.Push((kids[i], depth + 1));
+                    }
                 }
             }
         }

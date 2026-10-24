@@ -9,6 +9,16 @@ public class TraceWaterfallTests
             Start.AddMilliseconds(startMs), TimeSpan.FromMilliseconds(durationMs), SpanStatusCode.Unset,
             new Dictionary<string, string>());
 
+    private static void AssertPercents(double[] expected, IEnumerable<double> actual)
+    {
+        var values = actual.ToArray();
+        Assert.Equal(expected.Length, values.Length);
+        for (var i = 0; i < expected.Length; i++)
+        {
+            Assert.Equal(expected[i], values[i], precision: 3);
+        }
+    }
+
     [Fact]
     public void Build_NullInput_Throws()
     {
@@ -71,7 +81,81 @@ public class TraceWaterfallTests
     }
 
     [Fact]
-    public void Build_CycleDoesNotLoopForever()
+    public void Build_SingleRoot_HasZeroOffsetAndFullWidth()
+    {
+        var rows = TraceWaterfall.Build([Span("root", null, 0, 100)]);
+
+        var row = Assert.Single(rows);
+        Assert.Equal(0, row.Depth);
+        Assert.Equal(TimeSpan.Zero, row.Offset);
+        Assert.Equal(0, row.OffsetPercent, precision: 6);
+        Assert.Equal(100, row.WidthPercent, precision: 6);
+    }
+
+    [Fact]
+    public void Build_ChildrenGivenInReverseOrder_ReturnsPreOrderWithPercentages()
+    {
+        var spans = new[]
+        {
+            Span("child2", "root", 50, 10),
+            Span("root", null, 0, 100),
+            Span("child1", "root", 10, 20),
+        };
+
+        var rows = TraceWaterfall.Build(spans);
+
+        Assert.Equal(["root", "child1", "child2"], rows.Select(r => r.Span.SpanId));
+        Assert.Equal([0, 1, 1], rows.Select(r => r.Depth));
+        AssertPercents([0, 10, 50], rows.Select(r => r.OffsetPercent));
+        AssertPercents([100, 20, 10], rows.Select(r => r.WidthPercent));
+    }
+
+    [Fact]
+    public void Build_SpansWithIdenticalStartTime_OrderedBySpanId()
+    {
+        var spans = new[]
+        {
+            Span("root", null, 0, 100),
+            Span("zeta", "root", 10, 5),
+            Span("alpha", "root", 10, 5),
+        };
+
+        var rows = TraceWaterfall.Build(spans);
+
+        Assert.Equal(["root", "alpha", "zeta"], rows.Select(r => r.Span.SpanId));
+    }
+
+    [Fact]
+    public void Build_ZeroDurationSpan_WidthAtLeastMinimum()
+    {
+        var spans = new[]
+        {
+            Span("root", null, 0, 100),
+            Span("marker", "root", 50, 0),
+        };
+
+        var rows = TraceWaterfall.Build(spans);
+
+        Assert.True(rows[1].WidthPercent >= 0.1, $"WidthPercent was {rows[1].WidthPercent}");
+    }
+
+    [Fact]
+    public void Build_TwoSpanCycle_ReturnsEachSpanExactlyOnce()
+    {
+        var spans = new[]
+        {
+            Span("a", "b", 0, 10),
+            Span("b", "a", 10, 10),
+        };
+
+        var rows = TraceWaterfall.Build(spans);
+
+        Assert.Equal(["a", "b"], rows.Select(r => r.Span.SpanId));
+        Assert.Equal([0, 1], rows.Select(r => r.Depth));
+    }
+
+    [Fact]
+    public void Build_CycleBelowRoot_TerminatesAndReturnsAllSpans()
     {
         var spans = new[]
         {
@@ -82,7 +166,8 @@ public class TraceWaterfallTests
 
         var rows = TraceWaterfall.Build(spans);
 
-        Assert.Equal(["root"], rows.Select(r => r.Span.SpanId));
+        Assert.Equal(["root", "x", "y"], rows.Select(r => r.Span.SpanId));
+        Assert.Equal([0, 0, 1], rows.Select(r => r.Depth));
     }
 
     [Fact]
