@@ -39,7 +39,23 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
 
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<SpanRecord>> QuerySpansAsync(SpanQuery query, CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        IReadOnlyList<SpanRecord> matches = _spans.Snapshot()
+            .Where(span => query.ServiceName is null || string.Equals(span.ServiceName, query.ServiceName, StringComparison.Ordinal))
+            .Where(span => query.SpanName is null || string.Equals(span.Name, query.SpanName, StringComparison.Ordinal))
+            .Where(span => query.MinDuration is null || span.Duration >= query.MinDuration.Value)
+            .Where(span => !query.ErrorsOnly || span.StatusCode == SpanStatusCode.Error)
+            .Where(span => query.From is null || span.StartTime >= query.From.Value)
+            .Where(span => query.To is null || span.StartTime < query.To.Value)
+            .OrderByDescending(span => span.StartTime)
+            .ThenBy(span => span.SpanId, StringComparer.Ordinal)
+            .Take(query.Limit)
+            .ToArray();
+
+        return ValueTask.FromResult(matches);
+    }
 
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<SpanRecord>> GetTraceAsync(string traceId, CancellationToken cancellationToken = default)
