@@ -28,7 +28,7 @@ internal static class OtlpMetricsDecoder
             // resource_metrics = 1
             if (fieldNumber == 1 && wireType == WireType.LengthDelimited)
             {
-                DecodeResourceMetrics(reader.ReadLengthDelimited(), points);
+                DecodeResourceMetrics(reader.ReadLengthDelimited(), points, 1);
             }
             else
             {
@@ -39,8 +39,9 @@ internal static class OtlpMetricsDecoder
         return points;
     }
 
-    private static void DecodeResourceMetrics(ReadOnlySpan<byte> bytes, List<MetricPoint> points)
+    private static void DecodeResourceMetrics(ReadOnlySpan<byte> bytes, List<MetricPoint> points, int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         // The resource may appear after scope_metrics on the wire, so locate it before decoding any metric.
         ReadOnlySpan<byte> resource = default;
         var reader = new ProtobufReader(bytes);
@@ -65,7 +66,7 @@ internal static class OtlpMetricsDecoder
             // scope_metrics = 2
             if (fieldNumber == 2 && wireType == WireType.LengthDelimited)
             {
-                DecodeScopeMetrics(reader.ReadLengthDelimited(), serviceName, points);
+                DecodeScopeMetrics(reader.ReadLengthDelimited(), serviceName, points, depth + 1);
             }
             else
             {
@@ -74,15 +75,16 @@ internal static class OtlpMetricsDecoder
         }
     }
 
-    private static void DecodeScopeMetrics(ReadOnlySpan<byte> bytes, string serviceName, List<MetricPoint> points)
+    private static void DecodeScopeMetrics(ReadOnlySpan<byte> bytes, string serviceName, List<MetricPoint> points, int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         var reader = new ProtobufReader(bytes);
         while (reader.TryReadTag(out int fieldNumber, out WireType wireType))
         {
             // metrics = 2
             if (fieldNumber == 2 && wireType == WireType.LengthDelimited)
             {
-                DecodeMetric(reader.ReadLengthDelimited(), serviceName, points);
+                DecodeMetric(reader.ReadLengthDelimited(), serviceName, points, depth + 1);
             }
             else
             {
@@ -91,8 +93,9 @@ internal static class OtlpMetricsDecoder
         }
     }
 
-    private static void DecodeMetric(ReadOnlySpan<byte> bytes, string serviceName, List<MetricPoint> points)
+    private static void DecodeMetric(ReadOnlySpan<byte> bytes, string serviceName, List<MetricPoint> points, int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         string name = string.Empty;
         string unit = string.Empty;
         MetricType? type = null;
@@ -154,11 +157,11 @@ internal static class OtlpMetricsDecoder
 
         if (metricType == MetricType.Histogram)
         {
-            DecodeHistogramDataPoints(dataPoints, serviceName, name, unit, points);
+            DecodeHistogramDataPoints(dataPoints, serviceName, name, unit, points, depth + 1);
         }
         else
         {
-            DecodeNumberDataPoints(dataPoints, serviceName, name, unit, metricType, points);
+            DecodeNumberDataPoints(dataPoints, serviceName, name, unit, metricType, points, depth + 1);
         }
     }
 
@@ -168,15 +171,17 @@ internal static class OtlpMetricsDecoder
         string metricName,
         string unit,
         MetricType type,
-        List<MetricPoint> points)
+        List<MetricPoint> points,
+        int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         var reader = new ProtobufReader(bytes);
         while (reader.TryReadTag(out int fieldNumber, out WireType wireType))
         {
             // data_points = 1 (repeated NumberDataPoint). Gauge and Sum share this field number.
             if (fieldNumber == 1 && wireType == WireType.LengthDelimited)
             {
-                points.Add(DecodeNumberDataPoint(reader.ReadLengthDelimited(), serviceName, metricName, unit, type));
+                points.Add(DecodeNumberDataPoint(reader.ReadLengthDelimited(), serviceName, metricName, unit, type, depth + 1));
             }
             else
             {
@@ -190,8 +195,10 @@ internal static class OtlpMetricsDecoder
         string serviceName,
         string metricName,
         string unit,
-        MetricType type)
+        MetricType type,
+        int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         var attributes = new Dictionary<string, string>();
         ulong timeUnixNanos = 0;
         double value = 0;
@@ -243,15 +250,17 @@ internal static class OtlpMetricsDecoder
         string serviceName,
         string metricName,
         string unit,
-        List<MetricPoint> points)
+        List<MetricPoint> points,
+        int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         var reader = new ProtobufReader(bytes);
         while (reader.TryReadTag(out int fieldNumber, out WireType wireType))
         {
             // data_points = 1 (repeated HistogramDataPoint)
             if (fieldNumber == 1 && wireType == WireType.LengthDelimited)
             {
-                points.Add(DecodeHistogramDataPoint(reader.ReadLengthDelimited(), serviceName, metricName, unit));
+                points.Add(DecodeHistogramDataPoint(reader.ReadLengthDelimited(), serviceName, metricName, unit, depth + 1));
             }
             else
             {
@@ -264,8 +273,10 @@ internal static class OtlpMetricsDecoder
         ReadOnlySpan<byte> bytes,
         string serviceName,
         string metricName,
-        string unit)
+        string unit,
+        int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         var attributes = new Dictionary<string, string>();
         var bucketCounts = new List<ulong>();
         var explicitBounds = new List<double>();

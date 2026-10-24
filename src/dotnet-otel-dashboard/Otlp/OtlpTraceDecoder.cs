@@ -12,6 +12,9 @@ internal static class OtlpTraceDecoder
     // Largest tick count (100 ns units) that fits between the Unix epoch and DateTimeOffset.MaxValue.
     private static readonly ulong MaxUnixTicks = (ulong)(DateTimeOffset.MaxValue.UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks);
 
+    private const int TraceIdLength = 16;
+    private const int SpanIdLength = 8;
+
     /// <summary>
     /// Decodes an <c>ExportTraceServiceRequest</c> message into the spans it contains.
     /// </summary>
@@ -27,7 +30,7 @@ internal static class OtlpTraceDecoder
             // resource_spans = 1
             if (fieldNumber == 1 && wireType == WireType.LengthDelimited)
             {
-                DecodeResourceSpans(reader.ReadLengthDelimited(), spans);
+                DecodeResourceSpans(reader.ReadLengthDelimited(), spans, 1);
             }
             else
             {
@@ -38,8 +41,9 @@ internal static class OtlpTraceDecoder
         return spans;
     }
 
-    private static void DecodeResourceSpans(ReadOnlySpan<byte> bytes, List<SpanRecord> spans)
+    private static void DecodeResourceSpans(ReadOnlySpan<byte> bytes, List<SpanRecord> spans, int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         // The resource may appear after scope_spans on the wire, so locate it before decoding any span.
         ReadOnlySpan<byte> resource = default;
         var reader = new ProtobufReader(bytes);
@@ -64,7 +68,7 @@ internal static class OtlpTraceDecoder
             // scope_spans = 2
             if (fieldNumber == 2 && wireType == WireType.LengthDelimited)
             {
-                DecodeScopeSpans(reader.ReadLengthDelimited(), serviceName, spans);
+                DecodeScopeSpans(reader.ReadLengthDelimited(), serviceName, spans, depth + 1);
             }
             else
             {
@@ -73,15 +77,16 @@ internal static class OtlpTraceDecoder
         }
     }
 
-    private static void DecodeScopeSpans(ReadOnlySpan<byte> bytes, string serviceName, List<SpanRecord> spans)
+    private static void DecodeScopeSpans(ReadOnlySpan<byte> bytes, string serviceName, List<SpanRecord> spans, int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         var reader = new ProtobufReader(bytes);
         while (reader.TryReadTag(out int fieldNumber, out WireType wireType))
         {
             // spans = 2
             if (fieldNumber == 2 && wireType == WireType.LengthDelimited)
             {
-                spans.Add(DecodeSpan(reader.ReadLengthDelimited(), serviceName));
+                spans.Add(DecodeSpan(reader.ReadLengthDelimited(), serviceName, depth + 1));
             }
             else
             {
@@ -90,8 +95,9 @@ internal static class OtlpTraceDecoder
         }
     }
 
-    private static SpanRecord DecodeSpan(ReadOnlySpan<byte> bytes, string serviceName)
+    private static SpanRecord DecodeSpan(ReadOnlySpan<byte> bytes, string serviceName, int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         string traceId = string.Empty;
         string spanId = string.Empty;
         string? parentSpanId = null;
@@ -109,17 +115,17 @@ internal static class OtlpTraceDecoder
             {
                 // trace_id = 1 (16 bytes)
                 case (1, WireType.LengthDelimited):
-                    traceId = ToHex(reader.ReadLengthDelimited());
+                    traceId = ToTraceId(reader.ReadLengthDelimited());
                     break;
 
                 // span_id = 2 (8 bytes)
                 case (2, WireType.LengthDelimited):
-                    spanId = ToHex(reader.ReadLengthDelimited());
+                    spanId = ToSpanId(reader.ReadLengthDelimited(), "span_id");
                     break;
 
                 // parent_span_id = 4 (8 bytes, empty for root spans)
                 case (4, WireType.LengthDelimited):
-                    parentSpanId = ToHexOrNull(reader.ReadLengthDelimited());
+                    parentSpanId = ToOptionalSpanId(reader.ReadLengthDelimited(), "parent_span_id");
                     break;
 
                 // name = 5
@@ -149,7 +155,7 @@ internal static class OtlpTraceDecoder
 
                 // status = 15
                 case (15, WireType.LengthDelimited):
-                    statusCode = DecodeStatusCode(reader.ReadLengthDelimited());
+                    statusCode = DecodeStatusCode(reader.ReadLengthDelimited(), depth + 1);
                     break;
 
                 default:
@@ -178,8 +184,9 @@ internal static class OtlpTraceDecoder
             attributes);
     }
 
-    private static SpanStatusCode DecodeStatusCode(ReadOnlySpan<byte> statusBytes)
+    private static SpanStatusCode DecodeStatusCode(ReadOnlySpan<byte> statusBytes, int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         SpanStatusCode statusCode = SpanStatusCode.Unset;
         var reader = new ProtobufReader(statusBytes);
         while (reader.TryReadTag(out int fieldNumber, out WireType wireType))
@@ -198,14 +205,36 @@ internal static class OtlpTraceDecoder
         return statusCode;
     }
 
+    // trace_id is required and must be exactly 16 bytes.
+    private static string ToTraceId(ReadOnlySpan<byte> id)
+    {
+        if (id.Length != TraceIdLength)
+        {
+            throw new InvalidDataException($"trace_id must be {TraceIdLength} bytes but was {id.Length}.");
+        }
+
+        return ToHex(id);
+    }
+
+    // span_id is empty when absent; when present it must be exactly 8 bytes.
+    private static string ToSpanId(ReadOnlySpan<byte> id, string fieldName)
+    {
+        if (!id.IsEmpty && id.Length != SpanIdLength)
+        {
+            throw new InvalidDataException($"{fieldName} must be {SpanIdLength} bytes but was {id.Length}.");
+        }
+
+        return ToHex(id);
+    }
+
+    private static string? ToOptionalSpanId(ReadOnlySpan<byte> id, string fieldName)
+    {
+        return id.IsEmpty ? null : ToSpanId(id, fieldName);
+    }
+
     private static string ToHex(ReadOnlySpan<byte> id)
     {
         return Convert.ToHexString(id).ToLowerInvariant();
-    }
-
-    private static string? ToHexOrNull(ReadOnlySpan<byte> id)
-    {
-        return id.IsEmpty ? null : ToHex(id);
     }
 
     private static SpanKind ToSpanKind(ulong value)

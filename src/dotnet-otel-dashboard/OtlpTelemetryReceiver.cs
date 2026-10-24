@@ -8,6 +8,12 @@ namespace DotnetOtelDashboard;
 /// </summary>
 public sealed class OtlpTelemetryReceiver : ITelemetryReceiver
 {
+    /// <summary>
+    /// Largest payload, in bytes, accepted by a single <c>Receive*Async</c> call. Larger payloads are rejected before
+    /// any decoding takes place.
+    /// </summary>
+    public const int MaxPayloadBytes = 16 * 1024 * 1024;
+
     private readonly ITelemetryStore _store;
 
     /// <summary>
@@ -28,7 +34,14 @@ public sealed class OtlpTelemetryReceiver : ITelemetryReceiver
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Number of spans accepted.</returns>
     /// <exception cref="InvalidDataException">The payload is malformed.</exception>
-    public async ValueTask<int> ReceiveTracesAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken = default)
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="payload"/> is longer than <see cref="MaxPayloadBytes"/>.</exception>
+    public ValueTask<int> ReceiveTracesAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken = default)
+    {
+        ValidatePayloadSize(payload);
+        return ReceiveTracesCoreAsync(payload, cancellationToken);
+    }
+
+    private async ValueTask<int> ReceiveTracesCoreAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
         List<SpanRecord> spans;
         try
@@ -57,7 +70,14 @@ public sealed class OtlpTelemetryReceiver : ITelemetryReceiver
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Number of data points accepted.</returns>
     /// <exception cref="InvalidDataException">The payload is malformed.</exception>
-    public async ValueTask<int> ReceiveMetricsAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken = default)
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="payload"/> is longer than <see cref="MaxPayloadBytes"/>.</exception>
+    public ValueTask<int> ReceiveMetricsAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken = default)
+    {
+        ValidatePayloadSize(payload);
+        return ReceiveMetricsCoreAsync(payload, cancellationToken);
+    }
+
+    private async ValueTask<int> ReceiveMetricsCoreAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
         List<MetricPoint> points;
         try
@@ -86,7 +106,14 @@ public sealed class OtlpTelemetryReceiver : ITelemetryReceiver
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Number of log records accepted.</returns>
     /// <exception cref="InvalidDataException">The payload is malformed.</exception>
-    public async ValueTask<int> ReceiveLogsAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken = default)
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="payload"/> is longer than <see cref="MaxPayloadBytes"/>.</exception>
+    public ValueTask<int> ReceiveLogsAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken = default)
+    {
+        ValidatePayloadSize(payload);
+        return ReceiveLogsCoreAsync(payload, cancellationToken);
+    }
+
+    private async ValueTask<int> ReceiveLogsCoreAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
         List<LogRecord> records;
         try
@@ -105,5 +132,14 @@ public sealed class OtlpTelemetryReceiver : ITelemetryReceiver
 
         await _store.WriteLogsAsync(records, cancellationToken);
         return records.Count;
+    }
+
+    private static void ValidatePayloadSize(ReadOnlyMemory<byte> payload)
+    {
+        // Checked synchronously so an oversized payload fails at the call site, before any await.
+        if (payload.Length > MaxPayloadBytes)
+        {
+            throw new ArgumentOutOfRangeException(nameof(payload));
+        }
     }
 }

@@ -12,6 +12,10 @@ internal static class OtlpLogsDecoder
     // Largest tick count (100 ns units) that fits between the Unix epoch and DateTimeOffset.MaxValue.
     private static readonly ulong MaxUnixTicks = (ulong)(DateTimeOffset.MaxValue.UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks);
 
+    private const int TraceIdLength = 16;
+    private const int SpanIdLength = 8;
+    private const int MaxSeverityNumber = 24;
+
     /// <summary>
     /// Decodes an <c>ExportLogsServiceRequest</c> message into the log records it contains.
     /// </summary>
@@ -27,7 +31,7 @@ internal static class OtlpLogsDecoder
             // resource_logs = 1
             if (fieldNumber == 1 && wireType == WireType.LengthDelimited)
             {
-                DecodeResourceLogs(reader.ReadLengthDelimited(), records);
+                DecodeResourceLogs(reader.ReadLengthDelimited(), records, 1);
             }
             else
             {
@@ -38,8 +42,9 @@ internal static class OtlpLogsDecoder
         return records;
     }
 
-    private static void DecodeResourceLogs(ReadOnlySpan<byte> bytes, List<LogRecord> records)
+    private static void DecodeResourceLogs(ReadOnlySpan<byte> bytes, List<LogRecord> records, int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         // The resource may appear after scope_logs on the wire, so locate it before decoding any log record.
         ReadOnlySpan<byte> resource = default;
         var reader = new ProtobufReader(bytes);
@@ -64,7 +69,7 @@ internal static class OtlpLogsDecoder
             // scope_logs = 2
             if (fieldNumber == 2 && wireType == WireType.LengthDelimited)
             {
-                DecodeScopeLogs(reader.ReadLengthDelimited(), serviceName, records);
+                DecodeScopeLogs(reader.ReadLengthDelimited(), serviceName, records, depth + 1);
             }
             else
             {
@@ -73,15 +78,16 @@ internal static class OtlpLogsDecoder
         }
     }
 
-    private static void DecodeScopeLogs(ReadOnlySpan<byte> bytes, string serviceName, List<LogRecord> records)
+    private static void DecodeScopeLogs(ReadOnlySpan<byte> bytes, string serviceName, List<LogRecord> records, int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         var reader = new ProtobufReader(bytes);
         while (reader.TryReadTag(out int fieldNumber, out WireType wireType))
         {
             // log_records = 2
             if (fieldNumber == 2 && wireType == WireType.LengthDelimited)
             {
-                records.Add(DecodeLogRecord(reader.ReadLengthDelimited(), serviceName));
+                records.Add(DecodeLogRecord(reader.ReadLengthDelimited(), serviceName, depth + 1));
             }
             else
             {
@@ -90,8 +96,9 @@ internal static class OtlpLogsDecoder
         }
     }
 
-    private static LogRecord DecodeLogRecord(ReadOnlySpan<byte> bytes, string serviceName)
+    private static LogRecord DecodeLogRecord(ReadOnlySpan<byte> bytes, string serviceName, int depth)
     {
+        ProtobufReader.ValidateDepth(depth);
         ulong timeUnixNanos = 0;
         ulong observedTimeUnixNanos = 0;
         int severity = 0;
@@ -133,12 +140,12 @@ internal static class OtlpLogsDecoder
 
                 // trace_id = 9 (16 bytes, empty when not correlated)
                 case (9, WireType.LengthDelimited):
-                    traceId = ToHexOrNull(reader.ReadLengthDelimited());
+                    traceId = ToOptionalTraceId(reader.ReadLengthDelimited());
                     break;
 
                 // span_id = 10 (8 bytes, empty when not correlated)
                 case (10, WireType.LengthDelimited):
-                    spanId = ToHexOrNull(reader.ReadLengthDelimited());
+                    spanId = ToOptionalSpanId(reader.ReadLengthDelimited(), "span_id");
                     break;
 
                 // observed_time_unix_nano = 11 (fixed64)
@@ -166,20 +173,47 @@ internal static class OtlpLogsDecoder
             attributes);
     }
 
+    // trace_id is optional (null when not correlated); when present it must be exactly 16 bytes.
+    private static string? ToOptionalTraceId(ReadOnlySpan<byte> id)
+    {
+        if (id.IsEmpty)
+        {
+            return null;
+        }
+
+        if (id.Length != TraceIdLength)
+        {
+            throw new InvalidDataException($"trace_id must be {TraceIdLength} bytes but was {id.Length}.");
+        }
+
+        return ToHex(id);
+    }
+
+    // span_id is optional (null when not correlated); when present it must be exactly 8 bytes.
+    private static string? ToOptionalSpanId(ReadOnlySpan<byte> id, string fieldName)
+    {
+        if (id.IsEmpty)
+        {
+            return null;
+        }
+
+        if (id.Length != SpanIdLength)
+        {
+            throw new InvalidDataException($"{fieldName} must be {SpanIdLength} bytes but was {id.Length}.");
+        }
+
+        return ToHex(id);
+    }
+
     private static string ToHex(ReadOnlySpan<byte> id)
     {
         return Convert.ToHexString(id).ToLowerInvariant();
     }
 
-    private static string? ToHexOrNull(ReadOnlySpan<byte> id)
-    {
-        return id.IsEmpty ? null : ToHex(id);
-    }
-
     private static int ToSeverityNumber(ulong value)
     {
-        // Values outside the int range cannot be valid severities; clamp rather than wrap to a negative number.
-        return value <= int.MaxValue ? (int)value : int.MaxValue;
+        // Out-of-range values are clamped to the SeverityNumber range rather than rejected.
+        return value <= MaxSeverityNumber ? (int)value : MaxSeverityNumber;
     }
 
     private static DateTimeOffset ToDateTimeOffset(ulong unixNanos)

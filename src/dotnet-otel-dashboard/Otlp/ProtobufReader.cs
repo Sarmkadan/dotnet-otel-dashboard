@@ -39,6 +39,9 @@ internal ref struct ProtobufReader
 {
     private const int MaxVarintBytes = 10;
 
+    // Deepest embedded-message nesting accepted. OTLP nests far less, so deeper input is treated as malformed.
+    internal const int MaxMessageDepth = 32;
+
     // Largest field number permitted by the protobuf specification (2^29 - 1).
     private const ulong MaxFieldNumber = (1UL << 29) - 1;
 
@@ -193,6 +196,19 @@ internal ref struct ProtobufReader
                 break;
             default:
                 throw new InvalidDataException($"Cannot skip protobuf wire type {wireType}.");
+        }
+    }
+
+    /// <summary>
+    /// Throws when an embedded message is nested deeper than <see cref="MaxMessageDepth"/>.
+    /// </summary>
+    /// <param name="depth">Nesting depth of the message about to be decoded. The outermost message is depth 0.</param>
+    /// <exception cref="InvalidDataException"><paramref name="depth"/> exceeds <see cref="MaxMessageDepth"/>.</exception>
+    public static void ValidateDepth(int depth)
+    {
+        if (depth > MaxMessageDepth)
+        {
+            throw new InvalidDataException($"Protobuf message is nested deeper than {MaxMessageDepth} levels.");
         }
     }
 
