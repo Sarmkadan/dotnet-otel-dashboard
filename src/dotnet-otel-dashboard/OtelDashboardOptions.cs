@@ -6,6 +6,13 @@ namespace DotnetOtelDashboard;
 public sealed class OtelDashboardOptions
 {
     /// <summary>
+    /// Configuration section name used when binding from appsettings, e.g.
+    /// <c>builder.Configuration.GetSection(OtelDashboardOptions.SectionName)</c>. Matches the
+    /// <c>OtelDashboard</c> key in <c>appsettings.json</c>.
+    /// </summary>
+    public const string SectionName = "OtelDashboard";
+
+    /// <summary>
     /// How long telemetry is kept before being evicted. Default: 1 hour.
     /// </summary>
     public TimeSpan Retention { get; set; } = TimeSpan.FromHours(1);

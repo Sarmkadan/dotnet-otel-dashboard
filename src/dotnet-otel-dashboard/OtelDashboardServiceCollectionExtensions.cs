@@ -27,6 +27,9 @@ public static class OtelDashboardServiceCollectionExtensions
             optionsBuilder.Configure(configure);
         }
 
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<OtelDashboardOptions>, OtelDashboardOptionsValidator>());
+        optionsBuilder.ValidateOnStart();
+
         services.TryAddSingleton(TimeProvider.System);
 
         services.TryAddSingleton<ITelemetryStore>(sp => new InMemoryTelemetryStore(
