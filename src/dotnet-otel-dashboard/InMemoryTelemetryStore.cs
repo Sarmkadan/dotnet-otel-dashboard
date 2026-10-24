@@ -29,6 +29,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     /// <inheritdoc />
     public ValueTask WriteSpansAsync(IReadOnlyList<SpanRecord> spans, CancellationToken cancellationToken = default)
     {
+        EvictExpired();
         _spans.AddRange(spans);
         return ValueTask.CompletedTask;
     }
@@ -36,6 +37,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     /// <inheritdoc />
     public ValueTask WriteMetricsAsync(IReadOnlyList<MetricPoint> points, CancellationToken cancellationToken = default)
     {
+        EvictExpired();
         _metrics.AddRange(points);
         return ValueTask.CompletedTask;
     }
@@ -43,6 +45,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     /// <inheritdoc />
     public ValueTask WriteLogsAsync(IReadOnlyList<LogRecord> records, CancellationToken cancellationToken = default)
     {
+        EvictExpired();
         _logs.AddRange(records);
         return ValueTask.CompletedTask;
     }
@@ -51,6 +54,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     public ValueTask<IReadOnlyList<SpanRecord>> QuerySpansAsync(SpanQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+        EvictExpired();
 
         IReadOnlyList<SpanRecord> matches = _spans.Snapshot()
             .Where(span => query.ServiceName is null || string.Equals(span.ServiceName, query.ServiceName, StringComparison.Ordinal))
@@ -70,6 +74,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<SpanRecord>> GetTraceAsync(string traceId, CancellationToken cancellationToken = default)
     {
+        EvictExpired();
         IReadOnlyList<SpanRecord> trace = _spans.Snapshot()
             .Where(span => string.Equals(span.TraceId, traceId, StringComparison.Ordinal))
             .OrderBy(span => span.StartTime)
@@ -83,6 +88,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     public ValueTask<IReadOnlyList<MetricPoint>> QueryMetricsAsync(MetricQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+        EvictExpired();
 
         IReadOnlyList<MetricPoint> matches = _metrics.Snapshot()
             .Where(point => string.Equals(point.MetricName, query.MetricName, StringComparison.Ordinal))
@@ -98,6 +104,7 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
     public ValueTask<IReadOnlyList<LogRecord>> QueryLogsAsync(LogQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+        EvictExpired();
 
         IReadOnlyList<LogRecord> matches = _logs.Snapshot()
             .Where(record => query.ServiceName is null || string.Equals(record.ServiceName, query.ServiceName, StringComparison.Ordinal))
@@ -115,9 +122,45 @@ public sealed class InMemoryTelemetryStore : ITelemetryStore
 
     /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetServiceNamesAsync(CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        EvictExpired();
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var span in _spans.Snapshot())
+        {
+            names.Add(span.ServiceName);
+        }
+
+        foreach (var point in _metrics.Snapshot())
+        {
+            names.Add(point.ServiceName);
+        }
+
+        foreach (var record in _logs.Snapshot())
+        {
+            names.Add(record.ServiceName);
+        }
+
+        IReadOnlyList<string> sorted = names.Order(StringComparer.Ordinal).ToArray();
+        return ValueTask.FromResult(sorted);
+    }
 
     /// <inheritdoc />
     public ValueTask ClearAsync(CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        _spans.Clear();
+        _metrics.Clear();
+        _logs.Clear();
+        return ValueTask.CompletedTask;
+    }
+
+    // Drops records older than the retention window. Records are appended in arrival order, so the oldest
+    // entries sit at the head of each buffer and RemoveWhile can stop at the first record that is still fresh.
+    private void EvictExpired()
+    {
+        var cutoff = _timeProvider.GetUtcNow() - _options.Retention;
+        _spans.RemoveWhile(span => span.StartTime < cutoff);
+        _metrics.RemoveWhile(point => point.Timestamp < cutoff);
+        _logs.RemoveWhile(record => record.Timestamp < cutoff);
+    }
 }
